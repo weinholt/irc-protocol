@@ -1,0 +1,63 @@
+env:
+  matrix:
+    - SCHEME="ChezScheme_master"
+    - SCHEME="Guile_2.0"
+    - SCHEME="Guile_2.2"
+    - SCHEME="Larceny"
+    - SCHEME="Racket_6.2"
+    - SCHEME="Racket_HEAD"
+    - SCHEME="SagittariusScheme"
+    - SCHEME="VicareScheme"
+
+matrix:
+  allow_failures:
+    # The srfi project lacks compat libs for these.
+    - env: SCHEME="Guile_2.0"
+    - env: SCHEME="Guile_2.2"
+    - env: SCHEME="SagittariusScheme"
+  fast_finish: true
+
+addons:
+  apt:
+    packages:
+      # For Vicare
+      - libgmp-dev
+      # Sagittarius
+      - libgc-dev
+      - zlib1g-dev
+      - libffi-dev
+      # For Larceny
+      - libc6:i386
+      # GNU Guile
+      - libunistring-dev
+      - gcc-4.8
+    sources:
+      - ubuntu-toolchain-r-test
+
+language: c
+
+cache:
+  ccache: true
+  directories:
+    - $HOME/opt
+
+os:
+  - linux
+
+compiler:
+  - gcc
+
+before_script:
+  # Install akku
+  - wget https://github.com/weinholt/akku/releases/download/v0.1.1/akku-0.1.1.pcsv9.5.ta6le.tar.gz{,.sig}
+  - gpg --keyserver pool.sks-keyservers.net --recv-keys 08272FBB54EEB5072D5BA930E33E61A2E9B8C3A2
+  - gpg --verify akku-0.1.1.pcsv9.5.ta6le.tar.gz.sig && tar xvzf akku-0.1.1.pcsv9.5.ta6le.tar.gz
+  - (cd akku-*; ./install.sh; cd ..; ~/bin/akku install)
+  - export SCHEME_LIBRARY_PATH=$PWD/.akku/lib
+  # Install scheme-ci
+  - wget https://github.com/weinholt/scheme-ci/archive/master.zip -O scheme-ci-master.zip
+  - unzip scheme-ci-master.zip
+  - eval "$(CC=gcc-4.8 INSTALL_TARGET=$HOME/opt scheme-ci-master/install-scheme.sh $SCHEME)"
+
+script:
+  - tests/irc.sps

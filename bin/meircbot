@@ -1,0 +1,379 @@
+#!/usr/bin/env scheme-script
+;; -*- mode: scheme; coding: utf-8 -*- !#
+;; The Minimum-Effort IRC bot
+;; Copyright © 2008, 2009, 2010, 2017 Göran Weinholt <goran@weinholt.se>
+
+;; Permission is hereby granted, free of charge, to any person obtaining a
+;; copy of this software and associated documentation files (the "Software"),
+;; to deal in the Software without restriction, including without limitation
+;; the rights to use, copy, modify, merge, publish, distribute, sublicense,
+;; and/or sell copies of the Software, and to permit persons to whom the
+;; Software is furnished to do so, subject to the following conditions:
+
+;; The above copyright notice and this permission notice shall be included in
+;; all copies or substantial portions of the Software.
+
+;; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+;; IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+;; FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+;; THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+;; LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+;; FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+;; DEALINGS IN THE SOFTWARE.
+#!r6rs
+
+(import
+  (rnrs (6))
+  (only (srfi :13 strings) string-join string-trim-right)
+  (srfi :26 cut)
+  (srfi :39 parameters)
+  (industria crypto dsa)
+  (industria net otr)
+  (industria net tcp)
+  (industria net tls simple)
+  (xitomatl AS-match)
+  (irc-protocol ctcp)
+  (irc-protocol parse)
+  (irc-protocol format)
+  (irc-protocol fish))
+
+;;; Configuration default
+
+;; Nicknames to try, in order.
+(define *nicknames* '("Industry" "Industry`" "Industry_"
+                      "Zeal" "Zeal`" "Zeal_"))
+(define *nickname* (car *nicknames*))
+(define *realname* "The Minimum-Effort IRC bot")
+(define *username* "meircbot")
+(define *channels* '("#test"))
+(define *joined-channels* '())
+(define *isupport* (isupport-defaults))
+
+(define *server-hostname* "localhost")
+(define *server-port* "6667")
+(define *server-tls* #f)
+
+;; Maximum line size of a PRIVMSG passed via the server to server
+;; protocol, but without the target's nick. Conservative default.
+(define *max-linesize* 417)
+
+(define *in-fish* (make-parameter #f))
+(define *fish-keys* `(("#test" . ,(make-fish-key "test"))))
+
+;; Generating a private DSA key with OpenSSL:
+;; openssl dsaparam 1024 | openssl gendsa /dev/stdin > otr.pem
+;; Generating a private DSA key with GnuTLS:
+;; certtool --dsa --bits 1024 -p > otr.pem
+(define *in-otr* (make-parameter #f))
+(define *otr-key*
+  (and (file-exists? "otr.pem")
+       (dsa-private-key-from-pem-file "otr.pem")))
+(define *otr-states* '())
+
+;; Incoming messages will be transcoded with utf-8 and if that fails,
+;; fall back on latin-1.
+(define *outgoing-codec* (utf-8-codec))
+(define (transcode-outgoing str)
+  (string->bytevector str (make-transcoder *outgoing-codec*)))
+(define transcode-incoming
+  (let ((t1 (make-transcoder (utf-8-codec)
+                             (eol-style none)
+                             (error-handling-mode raise)))
+        (t2 (make-transcoder (latin-1-codec))))
+    (lambda (bv)
+      (guard (con
+              ((i/o-decoding-error? con)
+               (bytevector->string bv t2)))
+        (bytevector->string bv t1)))))
+
+;;; Helpers
+
+(define (print . x) (for-each display x) (newline))
+
+(define (binary-get-line port)
+  (let lp ((l '()))
+    (let ((b (get-u8 port)))
+      (cond ((and (eof-object? b) (null? l))
+             b)
+            ((eof-object? b)
+             (u8-list->bytevector (reverse l)))
+            ((= b (char->integer #\linefeed))
+             (if (null? l)
+                 '#vu8()
+                 (if (= (car l) (char->integer #\return))
+                     (u8-list->bytevector (reverse (cdr l)))
+                     (u8-list->bytevector (reverse l)))))
+            (else
+             (lp (cons b l)))))))
+
+(define (address=? x y)
+  (string-irc=? x y (assq 'CASEMAPPING *isupport*)))
+
+(define (its-me? prefix)
+  (and (string? prefix)
+       (address=? (if (extended-prefix? prefix)
+                      (prefix-nick prefix)
+                      prefix)
+                  *nickname*)))
+
+(define (find-channel channel)
+  (cond ((memp (lambda (c)
+                 (if (pair? c)
+                     (address=? channel (car c))
+                     (address=? channel c)))
+               *channels*)
+         => car)
+        (else #f)))
+
+(define (fish-key address)
+  (cond ((assp (lambda (s) (address=? s address))
+               *fish-keys*) => cdr)
+        (else #f)))
+
+(define (looks-fishy? msg)
+  ;; Don't match FiSH messages inside FiSH messages
+  (and (not (*in-fish*)) (fish-message? msg)))
+
+(define (for-otr? msg)
+  ;; Only accept Off-the-Record messages if the DSA key was loaded and
+  ;; the message was not inside a decrypted OTR message.
+  (and *otr-key*
+       (not (*in-otr*)) (otr-message? msg)))
+
+(define (get-otr-state src)
+  (cond ((assp (cut address=? <> src) *otr-states*) => cdr)
+        (else
+         (print "Making a new OTR state for " src)
+         (let ((state (make-otr-state *otr-key* (- *max-linesize*
+                                                   (string-length
+                                                    (prefix-nick src))))))
+           (set! *otr-states* (cons (cons src state) *otr-states*))
+           state))))
+
+;;; Main program
+
+(define *server-out* #f)
+
+(define (log-msg direction prefix cmd args)
+  (display direction) (display #\space)
+  (display prefix) (display #\space)
+  (display cmd) (display #\space)
+  (write args)
+  (newline))
+
+(define (fmt cmd . args)
+  (log-msg '=> #f cmd args)
+  (apply format-message-with-whitewash *server-out* *outgoing-codec* #f cmd args))
+
+(define (join-channel c)
+  (if (pair? c)
+      (fmt 'JOIN (car c) (cdr c))
+      (fmt 'JOIN c)))
+
+(define handle-message
+  (match-lambda
+    ((_ 'PING server)
+     (fmt 'PONG server))
+
+    ((src 'PRIVMSG tgt (? looks-fishy? msg))
+     ;; FiSH encrypted message
+     (cond ((fish-key (if (its-me? tgt) (prefix-nick src) tgt)) =>
+            (lambda (key)
+              (parameterize ((*in-fish* #t))
+                (let ((msg (transcode-incoming (fish-decrypt-message msg key))))
+                  ;; TODO: check if the decrypted message is still pseudo-random...
+                  (log-msg "<*(((><" src 'PRIVMSG (list tgt msg))
+                  (handle-message (list src 'PRIVMSG tgt msg))))))
+           (else
+            ;; There's no key for the channel or source
+            (if (its-me? tgt)
+                (fmt 'NOTICE (prefix-nick src) "Let's do a key exchange! You go first!")
+                (print "I don't have the key... give me the key")))))
+
+    ((src 'PRIVMSG (? its-me? tgt) (? ctcp-message? msg))
+     ;; Private CTCP message
+     (fmt 'NOTICE (prefix-nick src) "I don't support CTCP!"))
+
+    ((src 'PRIVMSG (? its-me? tgt) (? for-otr? msg))
+     ;; Off-the-record
+     (let ((state (get-otr-state src)))
+       (otr-update! state msg)
+       ;; TODO: is too much for the server's flood protection.
+       (parameterize ((*in-otr* state))
+         (let lp ()
+           (let ((queue (otr-empty-queue! state)))
+             (unless (null? queue)
+               (for-each
+                (match-lambda
+                 (('outgoing . line)
+                  (fmt 'PRIVMSG (prefix-nick src) line))
+                 (('encrypted . msg)
+                  (log-msg "OTR <=" src 'PRIVMSG (list tgt msg))
+                  (handle-message (list src 'PRIVMSG tgt msg)))
+                 (('session-established . _)
+                  (print "OTR session established.")
+                  (print "Their fingerprint: "
+                         (otr-hash-public-key (otr-state-their-dsa-key state)))
+                  (print "Our fingerprint: "
+                         (otr-hash-public-key (dsa-private->public
+                                               (otr-state-our-dsa-key state))))
+                  (print "Secure Session ID: "
+                         (otr-format-session-id (otr-state-secure-session-id state))))
+                 (('authentication . 'expecting-secret)
+                  (print "What's this? Secret code? Poems!")
+                  ;; XXX: this is what forces us to loop...
+                  (otr-authenticate! state (string->utf8 "password")))
+                 (('authentication . #t)
+                  (otr-send-encrypted! state "Congratulations! You know how to type 'password'!"))
+                 (('authentication . #f)
+                  (otr-send-encrypted! state "The password is: password."))
+                 (x
+                  (print "Unhandled OTR result:")
+                  (write x)
+                  (newline)))
+                queue)
+               (lp)))))))
+
+    ((src 'PRIVMSG (? its-me? tgt) msg)
+     ;; Private message
+     (let ((msg (string-trim-right msg)))
+       (cond ((*in-otr*)
+              (let ((outmsg (string-append "From you via OTR: '" msg "'")))
+                (cond ((string=? msg "auth")
+                       ;; Start an authentication request, just for testing
+                       ;; the feature.
+                       (log-msg "OTR auth =>" src 'PRIVMSG (list tgt #f))
+                       (otr-authenticate! (*in-otr*) (string->utf8 "password")))
+                      ((string=? msg "silencio"))
+                      ((string=? msg "duo")
+                       (otr-send-encrypted! (*in-otr*) "Unus")
+                       (otr-send-encrypted! (*in-otr*) "Duo")
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt "Unus"))
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt "Duo")))
+                      (else
+                       (log-msg "OTR =>" src 'PRIVMSG (list tgt outmsg))
+                       (otr-send-encrypted! (*in-otr*) outmsg)))
+                (for-each (match-lambda
+                           (('outgoing . line)
+                            (fmt 'PRIVMSG (prefix-nick src) line)))
+                          (otr-empty-queue! (*in-otr*)))))
+             ((*in-fish*)
+              (let ((msg (string-append "This is you: " (string-upcase msg)
+                                        " BLUB BLUB BLUB...")))
+                (log-msg "><)))*>" #f 'NOTICE (list (prefix-nick src) msg))
+                (fmt 'NOTICE (prefix-nick src)
+                     (fish-encrypt-message (transcode-outgoing msg)
+                                           (fish-key (prefix-nick src))))))
+             (else
+              (fmt 'NOTICE (prefix-nick src)
+                   (string-append "Here's a rude impression of you: "
+                                  (string-upcase msg) "!!"))))))
+
+    ((src 'NOTICE (? its-me? tgt) (? fish-key-init? msg))
+     ;; Replying to a NOTICE is not a good idea, but that's how the
+     ;; FiSH protocol works.
+     (let-values (((key reply) (fish-generate-key msg)))
+       (print "Exchanged FiSH keys with " src)
+       (set! *fish-keys* (cons (cons (prefix-nick src) key)
+                               *fish-keys*))
+       (fmt 'NOTICE (prefix-nick src) reply)
+       (fmt 'NOTICE (prefix-nick src)
+            (fish-encrypt-message (transcode-outgoing
+                                   "Can you hear me know? ... What about now?")
+                                  (fish-key (prefix-nick src))))))
+
+    (((? its-me? src) 'NOTICE (? its-me? tgt) "Max line size detection")
+     ;; This is done just to get our prefix length (src). There might
+     ;; be a better way to do it.
+     (set! *max-linesize* (- 512           ;total line size
+                             (+ (string-length ":")
+                                (string-length src)
+                                (string-length " PRIVMSG ")
+                                #;(string-length tgt)
+                                (string-length " :")
+                                #;(string-length msg)
+                                (string-length "\r\n"))))
+     (print "Maximum line size found to be " *max-linesize*))
+
+    ((_ 433 . _)
+     ;; ERR_NICKNAMEINUSE
+     (set! *nicknames* (cdr *nicknames*))
+     (when (null? *nicknames*)
+       (print "All nicknames are taken, giving up!")
+       (exit 1))
+     (set! *nickname* (car *nicknames*))
+     (fmt 'NICK *nickname*))
+
+    (((? its-me? src) 'NICK new)
+     ;; The server changed our nick
+     (set! *nickname* new)
+     (fmt 'NOTICE *nickname* "Max line size detection"))
+
+    (((? its-me? src) 'JOIN channel)
+     ;; The server joined us to a channel
+     (set! *joined-channels*
+           (cons channel *joined-channels*))
+     (fmt 'MODE channel)                ;ask for the modes
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
+
+    (((? its-me? src) 'PART channel)
+     ;; The server parted us from a channel
+     (set! *joined-channels*
+           (remp (cut address=? <> channel) *joined-channels*))
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
+
+    ((src 'KICK channel (? its-me? who) reason)
+     (set! *joined-channels*
+           (remp (cut address=? <> channel) *joined-channels*))
+     (print "Currently joined to " (string-join *joined-channels* ", ")))
+
+    ((_ 001 tgt msg)
+     ;; RPL_WELCOME
+     (fmt 'OPER "foo" "foo")
+     (fmt 'NOTICE *nickname* "Max line size detection")
+     (for-each join-channel *channels*))
+
+    ((_ 005 tgt . isupport)
+     ;; RPL_BOUNCE in the RFCs, but in practice, RPL_ISUPPORT.
+     (set! *isupport* (append (parse-isupport isupport)
+                              *isupport*)))
+
+    ((_ 'INVITE (? its-me? me) channel)
+     (cond ((find-channel channel) =>
+            (lambda (c)
+              (print "Honoring invite to " channel)
+              (join-channel c)))
+           (else
+            (print "Ignoring invite to " channel))))
+
+    ((_ 473 (? its-me? me) channel reason)
+     ;; ERR_INVITEONLYCHAN
+     (when (assq 'KNOCK *isupport*)
+       (cond ((find-channel channel) =>
+              (lambda (c) (fmt 'KNOCK channel))))))
+
+    (_ #f)))
+
+
+;; main loop
+(let-values (((in out . x) ((if *server-tls* tls-connect tcp-connect)
+                            *server-hostname* *server-port*)))
+  (set! *server-out* out)
+  (fmt 'NICK *nickname*)
+  (fmt 'USER *username* 0 "*" *realname*)
+  (let lp ()
+    (flush-output-port *server-out*)
+    (let ((line (binary-get-line in)))
+      (cond ((eof-object? line)
+             (print "The server hung up on me!"))
+            (else
+             (guard (exn
+                     (else
+                      (write exn) (newline)
+                      (print "The exception above was raised while parsing this line: "
+                             line)))
+               (let*-values (((prefix cmd parameters) (parse-message-bytevector line))
+                             ((args) (map transcode-incoming parameters)))
+                 (log-msg '<= prefix cmd args)
+                 (handle-message (cons prefix (cons cmd args)))))
+             (lp))))))
