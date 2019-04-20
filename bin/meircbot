@@ -1,7 +1,7 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*- !#
 ;; The Minimum-Effort IRC bot
-;; Copyright © 2008-2018 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2008-2019 Göran Weinholt <goran@weinholt.se>
 ;; SPDX-License-Identifier: MIT
 #!r6rs
 
@@ -14,7 +14,7 @@
   (industria otr)
   (industria tcp)
   (terrible-tls simple)
-  (xitomatl AS-match)
+  (chibi match)
   (irc-protocol ctcp)
   (irc-protocol parse)
   (irc-protocol format)
