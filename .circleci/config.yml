@@ -1,0 +1,11 @@
+version: 2
+jobs:
+  build:
+    docker:
+      - image: akkuscm/akku:latest
+    steps:
+      - checkout
+      - run: akku install
+      - run: |
+          . .akku/bin/activate
+          tests/irc.sps
