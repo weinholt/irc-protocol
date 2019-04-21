@@ -1,11 +1,32 @@
 version: 2
 jobs:
-  build:
+  "test-chezscheme":
     docker:
       - image: akkuscm/akku:latest
-    steps:
+    steps: &test_steps
       - checkout
       - run: akku install
       - run: |
           . .akku/bin/activate
-          tests/irc.sps
+          ./run-tests.sh
+  "test-guile": {docker: [{image: "akkuscm/akku:dev-guile"}], steps: *test_steps}
+  "test-ikarus": {docker: [{image: "akkuscm/akku:dev-ikarus"}], steps: *test_steps}
+  "test-ironscheme": {docker: [{image: "akkuscm/akku:dev-ironscheme"}], steps: *test_steps}
+  "test-larceny": {docker: [{image: "akkuscm/akku:dev-larceny"}], steps: *test_steps}
+  "test-racket": {docker: [{image: "akkuscm/akku:dev-racket"}], steps: *test_steps}
+  "test-sagittarius": {docker: [{image: "akkuscm/akku:dev-sagittarius"}], steps: *test_steps}
+  "test-vicare": {docker: [{image: "akkuscm/akku:dev-vicare"}], steps: *test_steps}
+  "test-ypsilon": {docker: [{image: "akkuscm/akku:dev-ypsilon"}], steps: *test_steps}
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - "test-chezscheme"
+      - "test-guile"
+      - "test-ikarus"
+      - "test-ironscheme"
+      - "test-larceny"
+      - "test-racket"
+      - "test-sagittarius"
+      - "test-vicare"
+      - "test-ypsilon"
