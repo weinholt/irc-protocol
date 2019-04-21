@@ -1,7 +1,7 @@
 #!r6rs ; -*- mode: scheme; coding: utf-8 -*-
 (import (akku format manifest))
 
-(akku-package ("irc-protocol" "0.1.0-alpha.0")
+(akku-package ("irc-protocol" "1.0.0")
   (synopsis "IRC protocol utilities")
   (authors "Göran Weinholt <goran@weinholt.se>")
   (license "MIT")

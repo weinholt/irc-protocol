@@ -1,6 +1,6 @@
 #!/usr/bin/env scheme-script
 ;; -*- mode: scheme; coding: utf-8 -*- !#
-;; Copyright © 2010-2018 Göran Weinholt <goran@weinholt.se>
+;; Copyright © 2010-2019 Göran Weinholt <goran@weinholt.se>
 
 ;; Permission is hereby granted, free of charge, to any person obtaining a
 ;; copy of this software and associated documentation files (the "Software"),
@@ -23,7 +23,7 @@
 
 (import
   (rnrs)
-  (srfi :78 lightweight-testing)
+  (srfi :64 testing)
   (industria bytevectors)
   (irc-protocol parse)
   (irc-protocol format))
@@ -46,84 +46,76 @@
                    (subbytevector str 0 (- (bytevector-length str) 2)))))
     x))
 
+(test-begin "irc")
+
 ;; See what happens when the last parameter is empty, and when there's
 ;; more than one space between parameters.
-(check (fmt-whitewash #f 'TOPIC "#test" "")
-       =>
-       "TOPIC #test :\r\n")
+(test-equal "TOPIC #test :\r\n"
+            (fmt-whitewash #f 'TOPIC "#test" ""))
 
-(check (parse (fmt-whitewash #f 'TOPIC "#test" ""))
-       =>
-       '(#f TOPIC ("#test" "")))
+(test-equal '(#f TOPIC ("#test" ""))
+            (parse (fmt-whitewash #f 'TOPIC "#test" "")))
 
-(check (parse "TOPIC #test \r\n")
-       =>
-       '(#f TOPIC ("#test")))
+(test-equal '(#f TOPIC ("#test"))
+            (parse "TOPIC #test \r\n"))
 
-(check (parse "TOPIC    #test   \r\n")
-       =>
-       '(#f TOPIC ("#test")))
+(test-equal '(#f TOPIC ("#test"))
+            (parse "TOPIC    #test   \r\n"))
 
-(check (parse "TOPIC    #test   :\r\n")
-       =>
-       '(#f TOPIC ("#test" "")))
+(test-equal '(#f TOPIC ("#test" ""))
+            (parse "TOPIC    #test   :\r\n"))
 
-(check (parse "TOPIC    #test   : \r\n")
-       =>
-       '(#f TOPIC ("#test" " ")))
+(test-equal '(#f TOPIC ("#test" " "))
+            (parse "TOPIC    #test   : \r\n"))
 
 ;; utf-8 equivalent
-(check (parse/bv (string->utf8 "TOPIC #test \r\n"))
-       =>
-       '(#f TOPIC (#vu8(35 116 101 115 116))))
+(test-equal '(#f TOPIC (#vu8(35 116 101 115 116)))
+            (parse/bv (string->utf8 "TOPIC #test \r\n")))
 
-(check (parse/bv (string->utf8 "TOPIC  #test    \r\n"))
-       =>
-       '(#f TOPIC (#vu8(35 116 101 115 116))))
+(test-equal '(#f TOPIC (#vu8(35 116 101 115 116)))
+            (parse/bv (string->utf8 "TOPIC  #test    \r\n")))
 
-(check (parse/bv (string->utf8 "TOPIC  #test    :\r\n"))
-       =>
-       '(#f TOPIC (#vu8(35 116 101 115 116) #vu8())))
+(test-equal '(#f TOPIC (#vu8(35 116 101 115 116) #vu8()))
+            (parse/bv (string->utf8 "TOPIC  #test    :\r\n")))
 
-(check (parse/bv (string->utf8 "TOPIC  #test    : \r\n"))
-       =>
-       '(#f TOPIC (#vu8(35 116 101 115 116) #vu8(32))))
+(test-equal '(#f TOPIC (#vu8(35 116 101 115 116) #vu8(32)))
+            (parse/bv (string->utf8 "TOPIC  #test    : \r\n")))
 
 
 ;; Examples..
-(check (utf8->string
-        (call-with-bytevector-output-port
-          (lambda (port)
-            (format-message-with-whitewash port (utf-8-codec)
-                                           #f 'NOTICE "#abusers"
-                                           "DrAbuse: your answer is: 123\r\nJOIN 0"))))
-       => "NOTICE #abusers :DrAbuse: your answer is: 123  JOIN 0\r\n")
+(test-equal "NOTICE #abusers :DrAbuse: your answer is: 123  JOIN 0\r\n"
+            (utf8->string
+             (call-with-bytevector-output-port
+               (lambda (port)
+                 (format-message-with-whitewash port (utf-8-codec)
+                                                #f 'NOTICE "#abusers"
+                                                "DrAbuse: your answer is: 123\r\nJOIN 0")))))
 
-(check (utf8->string
-        (call-with-bytevector-output-port
-          (lambda (port)
-            (format-message-and-verify port (utf-8-codec)
-                                       "irc.example.net" 'NOTICE "ErrantUser"
-                                       "The server has taken a liking to you"))))
-       => ":irc.example.net NOTICE ErrantUser :The server has taken a liking to you\r\n")
+(test-equal ":irc.example.net NOTICE ErrantUser :The server has taken a liking to you\r\n"
+            (utf8->string
+             (call-with-bytevector-output-port
+               (lambda (port)
+                 (format-message-and-verify port (utf-8-codec)
+                                            "irc.example.net" 'NOTICE "ErrantUser"
+                                            "The server has taken a liking to you")))))
 
-(check
+(test-equal
+ ":irc.example.net 001 luser :Welcome to the Example Internet Relay Chat Network luser\r\n"
  (utf8->string
   (call-with-bytevector-output-port
     (lambda (port)
       (format-message-raw port (utf-8-codec)
                           "irc.example.net" 001 "luser"
-                          "Welcome to the Example Internet Relay Chat Network luser"))))
- => ":irc.example.net 001 luser :Welcome to the Example Internet Relay Chat Network luser\r\n")
+                          "Welcome to the Example Internet Relay Chat Network luser")))))
 
-(check
+(test-equal
+ "PRIVMSG #example :This is a message to a channel\r\n"
  (utf8->string
   (call-with-bytevector-output-port
     (lambda (port)
       (format-message-raw port (utf-8-codec)
                           #f 'PRIVMSG "#example"
-                          "This is a message to a channel"))))
- => "PRIVMSG #example :This is a message to a channel\r\n")
+                          "This is a message to a channel")))))
 
 ;;; Channel mode commands
 
@@ -133,26 +125,26 @@
                       modes))
 
 ;; only
-(check (pchan '("+l" "50")) => '((+ #\l "50")))
-(check (pchan '("-l")) => '((- #\l #f)))
+(test-equal '((+ #\l "50")) (pchan '("+l" "50")))
+(test-equal '((- #\l #f)) (pchan '("-l")))
 
 ;; never
-(check (pchan '("m-m")) => '((+ #\m channel) (- #\m channel)))
-(check (pchan '("-m+m")) => '((- #\m channel) (+ #\m channel)))
+(test-equal '((+ #\m channel) (- #\m channel)) (pchan '("m-m")))
+(test-equal '((- #\m channel) (+ #\m channel)) (pchan '("-m+m")))
 
 ;; always
-(check (pchan '("+k-k" "foo")) => '((+ #\k "foo") (- #\k #f)))
-(check (pchan '("+k-k" "foo" "foo")) => '((+ #\k "foo") (- #\k "foo")))
+(test-equal '((+ #\k "foo") (- #\k #f)) (pchan '("+k-k" "foo")))
+(test-equal '((+ #\k "foo") (- #\k "foo")) (pchan '("+k-k" "foo" "foo")))
 
 ;; address
-(check (pchan '("+e" "*!*@*" "-e" "*!*@*")) => '((+ #\e "*!*@*") (- #\e "*!*@*")))
-(check (pchan '("+e" "*!*@*" "e")) => '((+ #\e "*!*@*") (? #\e channel)))
+(test-equal '((+ #\e "*!*@*") (- #\e "*!*@*")) (pchan '("+e" "*!*@*" "-e" "*!*@*")))
+(test-equal '((+ #\e "*!*@*") (? #\e channel)) (pchan '("+e" "*!*@*" "e")))
 
 ;; prefix
-(check (pchan '("+o" "Procrustes" "-o" "Procrustes")) => '((+ #\o "Procrustes") (- #\o "Procrustes")))
-(check (pchan '("o" "Procrustes")) => '((+ #\o "Procrustes")))
-(check (pchan '("o")) => '())
+(test-equal '((+ #\o "Procrustes") (- #\o "Procrustes")) (pchan '("+o" "Procrustes" "-o" "Procrustes")))
+(test-equal '((+ #\o "Procrustes")) (pchan '("o" "Procrustes")))
+(test-equal '() (pchan '("o")))
 
+(test-end)
 
-
-(check-report)
+(exit (if (zero? (test-runner-fail-count (test-runner-get))) 0 1))
