@@ -19,7 +19,7 @@
     (revision "387c6c365595c4a2e7ee3133f89161f1f3163488"))
   ((name "chez-srfi")
     (location (git "https://github.com/arcfide/chez-srfi"))
-    (revision "f704590f54f982d98c004e5ed3e55359ecab12e1"))
+    (revision "8296cf0394a73e74e63eb67901c0e7f25ab02a2f"))
   ((name "hashing")
     (location (git "https://github.com/weinholt/hashing.git"))
     (tag "v1.2.0")

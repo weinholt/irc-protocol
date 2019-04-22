@@ -19,7 +19,7 @@ jobs:
   "test-ypsilon": {docker: [{image: "akkuscm/akku:dev-ypsilon"}], steps: *test_steps}
 workflows:
   version: 2
-  build_and_test:
+  test:
     jobs:
       - "test-chezscheme"
       - "test-guile"
