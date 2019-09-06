@@ -11,7 +11,8 @@ jobs:
   "test-ikarus": {docker: [{image: "akkuscm/akku:ikarus"}], steps: *test_steps}
   "test-ironscheme": {docker: [{image: "akkuscm/akku:ironscheme"}], steps: *test_steps}
   "test-larceny": {docker: [{image: "akkuscm/akku:larceny"}], steps: *test_steps}
-  "test-mosh": {docker: [{image: "akkuscm/akku:ikarus"}], steps: *test_steps}
+  "test-loko": {docker: [{image: "akkuscm/akku:loko"}], steps: *test_steps}
+  "test-mosh": {docker: [{image: "akkuscm/akku:vicare"}], steps: *test_steps}
   "test-racket": {docker: [{image: "akkuscm/akku:racket"}], steps: *test_steps}
   "test-sagittarius": {docker: [{image: "akkuscm/akku:sagittarius"}], steps: *test_steps}
   "test-vicare": {docker: [{image: "akkuscm/akku:vicare"}], steps: *test_steps}
@@ -25,6 +26,7 @@ workflows:
       - "test-ikarus"
       - "test-ironscheme"
       - "test-larceny"
+      - "test-loko"
       - "test-mosh"
       - "test-racket"
       - "test-sagittarius"

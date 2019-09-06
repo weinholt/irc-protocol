@@ -21,7 +21,7 @@
     (revision "360090f68bd9b2096f2e8da8d62b1786af453a3c"))
   ((name "chez-srfi")
     (location (git "https://github.com/arcfide/chez-srfi"))
-    (revision "2c3ed8818884b7c96de32360939bd43a0159b4a9"))
+    (revision "5ff9fae299a4933188ce7cd1a225a3c26036ef0d"))
   ((name "struct-pack")
     (location
       (git "https://github.com/weinholt/struct-pack.git"))
