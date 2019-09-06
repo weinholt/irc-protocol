@@ -123,7 +123,7 @@
     (let ((bv (call-with-bytevector-output-port
                 (lambda (p)
                   (apply format-message-raw p codec prefix cmd parameters))))
-          (t (make-transcoder codec)))
+          (t (make-transcoder codec (eol-style none))))
       (call-with-values
         (lambda ()
           (guard (con
@@ -164,7 +164,7 @@
               ((= i (bytevector-length bv)))
             (let ((b (bytevector-u8-ref bv i)))
               (put-u8 p (if (memv b '(#x0a #x0d #x00)) #x20 b)))))))
-    (let ((t (make-transcoder codec)))
+    (let ((t (make-transcoder codec (eol-style none))))
       (apply format-message-raw port codec prefix cmd
              (let lp ((p parameters)
                       (l '()))
